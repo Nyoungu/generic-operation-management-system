@@ -1,0 +1,442 @@
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Zilla+Slab:wght@500;700&family=Work+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+  .wf * { box-sizing: border-box; }
+  .wf {
+    --bg: #EDE4D6;
+    --surface: #F8F4EC;
+    --ink: #2A2620;
+    --ink-soft: #6E6456;
+    --line: #DCD0B9;
+    --rust: #A6673B;
+    --rust-deep: #7C4A28;
+    --forest: #4A5D45;
+    --forest-deep: #333F30;
+    --slate: #57646C;
+    --danger: #A23A32;
+    --danger-bg: #F3E1DD;
+    font-family: 'Work Sans', sans-serif;
+    color: var(--ink);
+    background: var(--bg);
+    background-image: repeating-linear-gradient(90deg, rgba(0,0,0,0.015) 0px, rgba(0,0,0,0.015) 1px, transparent 1px, transparent 14px);
+    border-radius: 14px;
+    padding: 28px;
+    max-width: 980px;
+    margin: 0 auto;
+  }
+  .wf h1, .wf h2, .wf h3 { font-family: 'Zilla Slab', serif; font-weight: 700; margin: 0; }
+  .wf .mono { font-family: 'IBM Plex Mono', monospace; }
+  .wf button { font-family: 'Work Sans', sans-serif; cursor: pointer; }
+  .wf input, .wf select, .wf textarea { font-family: 'Work Sans', sans-serif; }
+</style>
+
+<div class="wf" id="wf-root">
+  <div style="display:flex; justify-content:space-between; align-items:flex-end; margin-bottom:22px; border-bottom:2px solid var(--ink); padding-bottom:14px;">
+    <div>
+      <div style="font-size:11px; letter-spacing:1.5px; text-transform:uppercase; color:var(--ink-soft); margin-bottom:4px;">Workshop operations</div>
+      <h1 style="font-size:30px;">Nathan Floor Operations</h1>
+    </div>
+    <div style="font-size:12px; color:var(--ink-soft); text-align:right;" id="wf-date"></div>
+  </div>
+
+  <div id="wf-tabs" style="display:flex; gap:4px; margin-bottom:22px; flex-wrap:wrap;"></div>
+  <div id="wf-content"></div>
+</div>
+
+<script>
+(function(){
+  const root = document.getElementById('wf-root');
+  const STAGES = ['Queued','Cutting','Assembly','Sanding & finishing','Quality check','Complete'];
+  const ORDER_STATUSES = ['Quote','Confirmed','In production','Ready for delivery','Delivered','Cancelled'];
+  const CATEGORIES = ['Raw lumber','Hardware & fasteners','Finishes & adhesives','Packaging','Other'];
+
+  let state = { inventory: [], orders: [], production: [], suppliers: [] };
+  let tab = 'overview';
+  let loaded = false;
+
+  document.getElementById('wf-date').textContent = new Date().toLocaleDateString(undefined, { weekday:'long', year:'numeric', month:'long', day:'numeric' });
+
+  async function loadAll() {
+    for (const key of ['inventory','orders','production','suppliers']) {
+      try {
+        const r = await window.storage.get(key, false);
+        state[key] = r ? JSON.parse(r.value) : [];
+      } catch (e) { state[key] = []; }
+    }
+    loaded = true;
+    render();
+  }
+  async function save(key) {
+    try { await window.storage.set(key, JSON.stringify(state[key]), false); }
+    catch (e) { console.error('save failed', key, e); }
+  }
+  function uid() { return Math.random().toString(36).slice(2,9); }
+  function fmtMoney(n) { return '₦' + Number(n||0).toLocaleString(undefined, {maximumFractionDigits:0}); }
+  function esc(s) { const d=document.createElement('div'); d.textContent = s==null?'':s; return d.innerHTML; }
+
+  function btn(label, opts) {
+    opts = opts || {};
+    const bg = opts.solid ? 'var(--rust)' : 'transparent';
+    const color = opts.solid ? '#fff' : 'var(--ink)';
+    const border = opts.solid ? 'var(--rust)' : 'var(--ink)';
+    return `<button data-action="${opts.action||''}" data-id="${opts.id||''}" style="background:${bg}; color:${color}; border:1.5px solid ${border}; border-radius:6px; padding:7px 14px; font-size:13px; font-weight:500;">${label}</button>`;
+  }
+
+  function tabsBar() {
+    const tabs = [['overview','Overview'],['inventory','Inventory'],['orders','Orders'],['production','Production'],['suppliers','Suppliers']];
+    return tabs.map(([key,label]) => {
+      const active = key === tab;
+      return `<button data-tab="${key}" style="background:${active?'var(--ink)':'transparent'}; color:${active?'var(--bg)':'var(--ink)'}; border:1.5px solid var(--ink); border-radius:6px; padding:8px 16px; font-size:14px; font-weight:500;">${label}</button>`;
+    }).join('');
+  }
+
+  // ---------- OVERVIEW ----------
+  function overviewView() {
+    const low = state.inventory.filter(i => Number(i.qty) <= Number(i.reorder));
+    const openOrders = state.orders.filter(o => !['Delivered','Cancelled'].includes(o.status));
+    const activeJobs = state.production.filter(p => p.stage !== 'Complete');
+    const cards = [
+      ['Low stock items', low.length, 'var(--danger)'],
+      ['Open orders', openOrders.length, 'var(--rust)'],
+      ['Active jobs', activeJobs.length, 'var(--forest)'],
+      ['Materials tracked', state.inventory.length, 'var(--slate)']
+    ];
+    let html = `<div style="display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:26px;">`;
+    cards.forEach(([label,val,color]) => {
+      html += `<div style="background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:14px;">
+        <div style="font-size:12px; color:var(--ink-soft); margin-bottom:6px;">${label}</div>
+        <div class="mono" style="font-size:26px; font-weight:500; color:${color};">${val}</div>
+      </div>`;
+    });
+    html += `</div>`;
+
+    html += `<div style="display:grid; grid-template-columns:1fr 1fr; gap:18px;">`;
+    html += `<div><h3 style="font-size:16px; margin-bottom:10px;">Needs restocking</h3>`;
+    if (!low.length) html += `<div style="font-size:13px; color:var(--ink-soft);">Nothing below reorder point.</div>`;
+    low.forEach(i => {
+      html += `<div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid var(--line); font-size:13px;">
+        <span>${esc(i.name)}</span><span class="mono" style="color:var(--danger);">${i.qty} ${esc(i.unit)}</span></div>`;
+    });
+    html += `</div>`;
+
+    html += `<div><h3 style="font-size:16px; margin-bottom:10px;">In production</h3>`;
+    if (!activeJobs.length) html += `<div style="font-size:13px; color:var(--ink-soft);">No active jobs on the floor.</div>`;
+    activeJobs.slice(0,6).forEach(p => {
+      html += `<div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid var(--line); font-size:13px;">
+        <span>${esc(p.title)}</span><span style="color:var(--forest); font-weight:500;">${esc(p.stage)}</span></div>`;
+    });
+    html += `</div></div>`;
+    return html;
+  }
+
+  // ---------- INVENTORY ----------
+  function stockGauge(item) {
+    const max = Math.max(Number(item.qty), Number(item.reorder)*2, 1);
+    const pct = Math.min(100, Math.round((Number(item.qty)/max)*100));
+    const low = Number(item.qty) <= Number(item.reorder);
+    const color = low ? 'var(--danger)' : 'var(--forest)';
+    return `<div style="background:var(--line); border-radius:4px; height:8px; width:100%; overflow:hidden;">
+      <div style="background:${color}; height:100%; width:${pct}%; background-image:repeating-linear-gradient(90deg, rgba(255,255,255,0.15) 0 6px, transparent 6px 12px);"></div>
+    </div>`;
+  }
+
+  function inventoryView() {
+    let html = `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+      <h3 style="font-size:16px;">Raw materials & stock</h3>${btn('+ Add material', {action:'show-add-inv', solid:true})}</div>`;
+    html += `<div id="wf-add-inv" style="display:none; background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px;">
+      <div style="display:grid; grid-template-columns:2fr 1fr 1fr; gap:10px; margin-bottom:10px;">
+        <input id="inv-name" placeholder="Material name" style="padding:8px; border:1px solid var(--line); border-radius:6px;">
+        <select id="inv-cat" style="padding:8px; border:1px solid var(--line); border-radius:6px;">${CATEGORIES.map(c=>`<option>${c}</option>`).join('')}</select>
+        <input id="inv-supplier" placeholder="Supplier" style="padding:8px; border:1px solid var(--line); border-radius:6px;">
+      </div>
+      <div style="display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:10px; margin-bottom:10px;">
+        <input id="inv-qty" type="number" placeholder="Quantity" style="padding:8px; border:1px solid var(--line); border-radius:6px;">
+        <input id="inv-unit" placeholder="Unit (e.g. planks, L)" style="padding:8px; border:1px solid var(--line); border-radius:6px;">
+        <input id="inv-reorder" type="number" placeholder="Reorder point" style="padding:8px; border:1px solid var(--line); border-radius:6px;">
+        <input id="inv-cost" type="number" placeholder="Cost per unit" style="padding:8px; border:1px solid var(--line); border-radius:6px;">
+      </div>
+      ${btn('Save material', {action:'save-inv', solid:true})} ${btn('Cancel', {action:'hide-add-inv'})}
+    </div>`;
+
+    if (!state.inventory.length) {
+      html += `<div style="font-size:13px; color:var(--ink-soft); padding:20px 0;">No materials yet. Add your first item to start tracking stock.</div>`;
+    }
+    state.inventory.forEach(item => {
+      const low = Number(item.qty) <= Number(item.reorder);
+      html += `<div style="background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:10px;">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+          <div>
+            <div style="font-weight:500;">${esc(item.name)} ${low?'<span style="color:var(--danger); font-size:11px; margin-left:6px; font-weight:600;">LOW STOCK</span>':''}</div>
+            <div style="font-size:12px; color:var(--ink-soft); margin-top:2px;">${esc(item.category)} · ${esc(item.supplier)||'no supplier set'}</div>
+          </div>
+          <div style="text-align:right;">
+            <div class="mono" style="font-size:15px;">${item.qty} ${esc(item.unit)}</div>
+            <div style="font-size:11px; color:var(--ink-soft);">reorder at ${item.reorder} · ${fmtMoney(item.cost)}/unit</div>
+          </div>
+        </div>
+        <div style="margin-top:10px;">${stockGauge(item)}</div>
+        <div style="margin-top:10px; display:flex; gap:8px;">
+          ${btn('+ 10', {action:'inv-adjust', id:item.id+':10'})}
+          ${btn('- 10', {action:'inv-adjust', id:item.id+':-10'})}
+          ${btn('Remove', {action:'inv-delete', id:item.id})}
+        </div>
+      </div>`;
+    });
+    return html;
+  }
+
+  // ---------- ORDERS ----------
+  function statusColor(status) {
+    if (status==='Delivered') return 'var(--forest)';
+    if (status==='Cancelled') return 'var(--danger)';
+    if (status==='In production') return 'var(--rust)';
+    return 'var(--slate)';
+  }
+
+  function ordersView() {
+    let html = `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+      <h3 style="font-size:16px;">Customer orders</h3>${btn('+ New order', {action:'show-add-ord', solid:true})}</div>`;
+    html += `<div id="wf-add-ord" style="display:none; background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px;">
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px;">
+        <input id="ord-customer" placeholder="Customer name" style="padding:8px; border:1px solid var(--line); border-radius:6px;">
+        <input id="ord-due" type="date" style="padding:8px; border:1px solid var(--line); border-radius:6px;">
+      </div>
+      <textarea id="ord-desc" placeholder="What are they ordering?" style="width:100%; padding:8px; border:1px solid var(--line); border-radius:6px; margin-bottom:10px; min-height:60px;"></textarea>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px;">
+        <input id="ord-value" type="number" placeholder="Order value" style="padding:8px; border:1px solid var(--line); border-radius:6px;">
+        <select id="ord-status" style="padding:8px; border:1px solid var(--line); border-radius:6px;">${ORDER_STATUSES.map(s=>`<option>${s}</option>`).join('')}</select>
+      </div>
+      ${btn('Save order', {action:'save-ord', solid:true})} ${btn('Cancel', {action:'hide-add-ord'})}
+    </div>`;
+
+    if (!state.orders.length) {
+      html += `<div style="font-size:13px; color:var(--ink-soft); padding:20px 0;">No orders yet. Log your first customer order.</div>`;
+    }
+    state.orders.slice().reverse().forEach(o => {
+      html += `<div style="background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:10px;">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+          <div>
+            <div style="font-weight:500;">${esc(o.customer)}</div>
+            <div style="font-size:13px; color:var(--ink-soft); margin-top:3px; max-width:400px;">${esc(o.desc)}</div>
+          </div>
+          <div style="text-align:right;">
+            <div style="color:${statusColor(o.status)}; font-weight:600; font-size:13px;">${esc(o.status)}</div>
+            <div class="mono" style="font-size:13px; margin-top:3px;">${fmtMoney(o.value)}</div>
+          </div>
+        </div>
+        <div style="font-size:11px; color:var(--ink-soft); margin-top:8px;">due ${o.due||'not set'}</div>
+        <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+          <select data-action="ord-status" data-id="${o.id}" style="padding:6px; border:1px solid var(--line); border-radius:6px; font-size:12px;">
+            ${ORDER_STATUSES.map(s=>`<option ${s===o.status?'selected':''}>${s}</option>`).join('')}
+          </select>
+          ${btn('Send to production', {action:'ord-to-prod', id:o.id})}
+          ${btn('Delete', {action:'ord-delete', id:o.id})}
+        </div>
+      </div>`;
+    });
+    return html;
+  }
+
+  // ---------- PRODUCTION ----------
+  function jobTag(job, idx) {
+    const rot = idx % 2 === 0 ? '-1deg' : '1deg';
+    return `<div draggable="true" data-job="${job.id}" style="position:relative; background:var(--surface); border:1.5px dashed var(--ink-soft); border-radius:8px; padding:14px 12px 12px; margin-bottom:10px; transform:rotate(${rot}); cursor:grab;">
+      <div style="position:absolute; top:-7px; left:14px; width:12px; height:12px; border-radius:50%; background:var(--bg); border:1.5px solid var(--ink-soft);"></div>
+      <div style="font-weight:500; font-size:13px;">${esc(job.title)}</div>
+      <div class="mono" style="font-size:10px; color:var(--ink-soft); margin-top:4px;">JOB-${job.id.toUpperCase()}</div>
+      ${job.notes ? `<div style="font-size:11px; color:var(--ink-soft); margin-top:6px;">${esc(job.notes)}</div>` : ''}
+      <div style="margin-top:8px;">${btn('Remove', {action:'job-delete', id:job.id})}</div>
+    </div>`;
+  }
+
+  function productionView() {
+    let html = `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+      <h3 style="font-size:16px;">Job board</h3>${btn('+ New job', {action:'show-add-job', solid:true})}</div>`;
+    html += `<div id="wf-add-job" style="display:none; background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px;">
+      <input id="job-title" placeholder="Job title (e.g. Oak dining table x2)" style="width:100%; padding:8px; border:1px solid var(--line); border-radius:6px; margin-bottom:10px;">
+      <input id="job-notes" placeholder="Notes (optional)" style="width:100%; padding:8px; border:1px solid var(--line); border-radius:6px; margin-bottom:10px;">
+      ${btn('Save job', {action:'save-job', solid:true})} ${btn('Cancel', {action:'hide-add-job'})}
+    </div>`;
+
+    html += `<div style="display:flex; gap:10px; overflow-x:auto; padding-bottom:8px;">`;
+    STAGES.forEach(stage => {
+      const jobs = state.production.filter(p => p.stage === stage);
+      html += `<div data-stage="${stage}" style="min-width:170px; flex:1; background:rgba(0,0,0,0.02); border:1px solid var(--line); border-radius:10px; padding:10px;">
+        <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.5px; color:var(--ink-soft); font-weight:600; margin-bottom:10px;">${stage} · ${jobs.length}</div>`;
+      jobs.forEach((j,idx) => html += jobTag(j, idx));
+      html += `</div>`;
+    });
+    html += `</div>`;
+    return html;
+  }
+
+  // ---------- SUPPLIERS ----------
+  function suppliersView() {
+    let html = `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+      <h3 style="font-size:16px;">Suppliers</h3>${btn('+ Add supplier', {action:'show-add-sup', solid:true})}</div>
+      <div style="font-size:12px; color:var(--ink-soft); margin-bottom:14px;">Manual directory for now — no live API pricing or ordering. Add API links here once you've picked suppliers that support it.</div>`;
+
+    html += `<div id="wf-add-sup" style="display:none; background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px;">
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px;">
+        <input id="sup-name" placeholder="Supplier name" style="padding:8px; border:1px solid var(--line); border-radius:6px;">
+        <input id="sup-materials" placeholder="Materials supplied (e.g. oak, birch ply)" style="padding:8px; border:1px solid var(--line); border-radius:6px;">
+      </div>
+      <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:10px;">
+        <input id="sup-contact" placeholder="Contact (phone/email)" style="padding:8px; border:1px solid var(--line); border-radius:6px;">
+        <input id="sup-leadtime" placeholder="Typical lead time" style="padding:8px; border:1px solid var(--line); border-radius:6px;">
+        <input id="sup-website" placeholder="Website / order portal (optional)" style="padding:8px; border:1px solid var(--line); border-radius:6px;">
+      </div>
+      <textarea id="sup-notes" placeholder="Notes (pricing, terms, reliability...)" style="width:100%; padding:8px; border:1px solid var(--line); border-radius:6px; margin-bottom:10px; min-height:50px;"></textarea>
+      ${btn('Save supplier', {action:'save-sup', solid:true})} ${btn('Cancel', {action:'hide-add-sup'})}
+    </div>`;
+
+    if (!state.suppliers.length) {
+      html += `<div style="font-size:13px; color:var(--ink-soft); padding:20px 0;">No suppliers logged yet. Add one to start building your directory.</div>`;
+    }
+    state.suppliers.forEach(s => {
+      html += `<div style="background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:10px;">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+          <div>
+            <div style="font-weight:500;">${esc(s.name)}</div>
+            <div style="font-size:12px; color:var(--ink-soft); margin-top:2px;">${esc(s.materials)||'materials not set'}</div>
+          </div>
+          <div style="text-align:right; font-size:12px; color:var(--ink-soft);">${esc(s.leadtime)||'lead time not set'}</div>
+        </div>
+        <div style="font-size:12px; margin-top:8px; color:var(--ink-soft);">
+          ${s.contact?esc(s.contact):''}${s.contact&&s.website?' · ':''}${s.website?`<a href="${esc(s.website)}" target="_blank" style="color:var(--rust);">${esc(s.website)}</a>`:''}
+        </div>
+        ${s.notes?`<div style="font-size:12px; margin-top:6px;">${esc(s.notes)}</div>`:''}
+        <div style="margin-top:10px;">${btn('Remove', {action:'sup-delete', id:s.id})}</div>
+      </div>`;
+    });
+    return html;
+  }
+
+  function render() {
+    document.getElementById('wf-tabs').innerHTML = tabsBar();
+    const content = document.getElementById('wf-content');
+    if (!loaded) { content.innerHTML = `<div style="font-size:13px; color:var(--ink-soft);">Loading the floor...</div>`; return; }
+    if (tab==='overview') content.innerHTML = overviewView();
+    else if (tab==='inventory') content.innerHTML = inventoryView();
+    else if (tab==='orders') content.innerHTML = ordersView();
+    else if (tab==='production') content.innerHTML = productionView();
+    else if (tab==='suppliers') content.innerHTML = suppliersView();
+    wireEvents();
+  }
+
+  function wireEvents() {
+    root.querySelectorAll('[data-tab]').forEach(el => el.onclick = () => { tab = el.dataset.tab; render(); });
+
+    const toggle = (id, show) => { const e=document.getElementById(id); if (e) e.style.display = show?'block':'none'; };
+
+    root.querySelectorAll('[data-action]').forEach(el => {
+      const action = el.dataset.action;
+      if (el.tagName === 'SELECT') return;
+      el.onclick = async () => {
+        const id = el.dataset.id;
+        if (action==='show-add-inv') toggle('wf-add-inv', true);
+        else if (action==='hide-add-inv') toggle('wf-add-inv', false);
+        else if (action==='save-inv') {
+          const name = document.getElementById('inv-name').value.trim();
+          if (!name) return;
+          state.inventory.push({
+            id: uid(), name,
+            category: document.getElementById('inv-cat').value,
+            supplier: document.getElementById('inv-supplier').value.trim(),
+            qty: Number(document.getElementById('inv-qty').value)||0,
+            unit: document.getElementById('inv-unit').value.trim()||'units',
+            reorder: Number(document.getElementById('inv-reorder').value)||0,
+            cost: Number(document.getElementById('inv-cost').value)||0
+          });
+          await save('inventory'); render();
+        }
+        else if (action==='inv-adjust') {
+          const [itemId, delta] = id.split(':');
+          const item = state.inventory.find(i=>i.id===itemId);
+          if (item) { item.qty = Math.max(0, Number(item.qty)+Number(delta)); await save('inventory'); render(); }
+        }
+        else if (action==='inv-delete') {
+          state.inventory = state.inventory.filter(i=>i.id!==id); await save('inventory'); render();
+        }
+        else if (action==='show-add-ord') toggle('wf-add-ord', true);
+        else if (action==='hide-add-ord') toggle('wf-add-ord', false);
+        else if (action==='save-ord') {
+          const customer = document.getElementById('ord-customer').value.trim();
+          if (!customer) return;
+          state.orders.push({
+            id: uid(), customer,
+            desc: document.getElementById('ord-desc').value.trim(),
+            due: document.getElementById('ord-due').value,
+            value: Number(document.getElementById('ord-value').value)||0,
+            status: document.getElementById('ord-status').value
+          });
+          await save('orders'); render();
+        }
+        else if (action==='ord-delete') {
+          state.orders = state.orders.filter(o=>o.id!==id); await save('orders'); render();
+        }
+        else if (action==='ord-to-prod') {
+          const o = state.orders.find(x=>x.id===id);
+          if (o) {
+            state.production.push({ id: uid(), title: o.desc || o.customer, stage:'Queued', notes:'for '+o.customer, orderId:o.id });
+            await save('production');
+            tab = 'production'; render();
+          }
+        }
+        else if (action==='show-add-job') toggle('wf-add-job', true);
+        else if (action==='hide-add-job') toggle('wf-add-job', false);
+        else if (action==='save-job') {
+          const title = document.getElementById('job-title').value.trim();
+          if (!title) return;
+          state.production.push({ id: uid(), title, stage:'Queued', notes: document.getElementById('job-notes').value.trim() });
+          await save('production'); render();
+        }
+        else if (action==='job-delete') {
+          state.production = state.production.filter(p=>p.id!==id); await save('production'); render();
+        }
+        else if (action==='show-add-sup') toggle('wf-add-sup', true);
+        else if (action==='hide-add-sup') toggle('wf-add-sup', false);
+        else if (action==='save-sup') {
+          const name = document.getElementById('sup-name').value.trim();
+          if (!name) return;
+          state.suppliers.push({
+            id: uid(), name,
+            materials: document.getElementById('sup-materials').value.trim(),
+            contact: document.getElementById('sup-contact').value.trim(),
+            leadtime: document.getElementById('sup-leadtime').value.trim(),
+            website: document.getElementById('sup-website').value.trim(),
+            notes: document.getElementById('sup-notes').value.trim()
+          });
+          await save('suppliers'); render();
+        }
+        else if (action==='sup-delete') {
+          state.suppliers = state.suppliers.filter(s=>s.id!==id); await save('suppliers'); render();
+        }
+      };
+    });
+
+    root.querySelectorAll('select[data-action="ord-status"]').forEach(el => {
+      el.onchange = async () => {
+        const o = state.orders.find(x=>x.id===el.dataset.id);
+        if (o) { o.status = el.value; await save('orders'); render(); }
+      };
+    });
+
+    // Drag and drop for production kanban
+    root.querySelectorAll('[data-job]').forEach(el => {
+      el.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', el.dataset.job); });
+    });
+    root.querySelectorAll('[data-stage]').forEach(col => {
+      col.addEventListener('dragover', e => e.preventDefault());
+      col.addEventListener('drop', async e => {
+        e.preventDefault();
+        const jobId = e.dataTransfer.getData('text/plain');
+        const job = state.production.find(p=>p.id===jobId);
+        if (job) { job.stage = col.dataset.stage; await save('production'); render(); }
+      });
+    });
+  }
+
+  loadAll();
+})();
+</script>
